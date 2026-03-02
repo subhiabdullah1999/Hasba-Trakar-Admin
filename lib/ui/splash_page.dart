@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // إضافة المكتبة لقراءة نوع المستخدم
 import 'admin_page.dart';
 import 'type_selctor_page.dart';
 
 class SplashScreen extends StatefulWidget {
   final String? savedID;
-  final String? userType;
+  final String? userType; // ميزة نوع المستخدم موجودة مسبقاً
   const SplashScreen({super.key, this.savedID, this.userType});
 
   @override
@@ -21,7 +22,7 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   void _startApp() async {
-    // طلب الصلاحيات الشاملة مرة أخرى لضمان عمل الرادار
+    // 1. طلب الصلاحيات الشاملة (الحفاظ على الميزة دون حذف أي سطر)
     await [
       Permission.location, 
       Permission.notification,
@@ -30,12 +31,35 @@ class _SplashScreenState extends State<SplashScreen> {
       Permission.systemAlertWindow
     ].request();
 
+    // 2. قراءة نوع المستخدم المحفوظ للتأكد من الوجهة الصحيحة
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? storedUserType = widget.userType ?? prefs.getString('user_type');
+
+    // 3. مؤقت الانتقال (3 ثوانٍ كما في الكود الأصلي)
     Timer(const Duration(seconds: 3), () {
       if (!mounted) return;
+
+      // المنطق المعدل: التحقق من وجود ID ونوع المستخدم للانتقال
       if (widget.savedID != null) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AdminPage()));
+        // إذا كان المستخدم أدمن (أو لم يحدد نوعه بعد ولكن لديه ID) يذهب لصفحة الأدمن
+        if (storedUserType == 'admin' || storedUserType == null) {
+          Navigator.pushReplacement(
+            context, 
+            MaterialPageRoute(builder: (context) => const AdminPage())
+          );
+        } else {
+          // في حال وجود أنواع أخرى مستقبلاً (مثل جهاز السيارة) يتم توجيهه هنا
+          Navigator.pushReplacement(
+            context, 
+            MaterialPageRoute(builder: (context) => const AppTypeSelector())
+          );
+        }
       } else {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AppTypeSelector()));
+        // إذا لم يوجد ID، يذهب لصفحة اختيار النوع
+        Navigator.pushReplacement(
+          context, 
+          MaterialPageRoute(builder: (context) => const AppTypeSelector())
+        );
       }
     });
   }
@@ -48,12 +72,22 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // أيقونة الحماية (ميزة مرئية)
             Icon(Icons.admin_panel_settings, size: 100, color: Colors.blue.shade900),
             const SizedBox(height: 20),
-            const Text("HASBA ADMIN", 
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+            const Text(
+              "HASBA ADMIN", 
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)
+            ),
             const SizedBox(height: 20),
+            // مؤشر التحميل (ميزة مرئية)
             const CircularProgressIndicator(color: Colors.blue),
+            const SizedBox(height: 20),
+            // نص إضافي يعزز الثقة (اختياري)
+            const Text(
+              "تأمين النظام...",
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            )
           ],
         ),
       ),

@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:hasba_trakar_admin/ui/dashboard_page.dart';
@@ -133,6 +132,7 @@ class _AdminPageState extends State<AdminPage> {
     });
   }
 
+  // --- دالة معدلة لاختيار الصوت بناءً على النص القادم من Firebase ---
   void _handleResponse(Map d) async {
     String type = d['type'] ?? '';
     String msg = d['message'] ?? '';
@@ -153,7 +153,20 @@ class _AdminPageState extends State<AdminPage> {
     });
 
     await _audioPlayer.stop();
-    await _audioPlayer.play(AssetSource(type == 'alert' ? 'sounds/alarm.mp3' : 'sounds/notification.mp3'));
+
+    // اختيار الصوت الذكي الجديد
+    String soundAsset = 'sounds/notification.mp3'; // افتراضي
+    if (msg.contains("سرقة") || msg.contains("اهتزاز") || msg.contains("محاولة اختراق")) {
+      soundAsset = 'sounds/سرقة.mp3';
+    } else if (msg.contains("سرعة") || msg.contains("تجاوز")) {
+      soundAsset = 'sounds/تجاوز سرعة.mp3';
+    } else if (msg.contains("نطاق") || msg.contains("المنطقة الآمنة") || msg.contains("تحركت")) {
+      soundAsset = 'sounds/نطاق الحماية.mp3';
+    } else if (type == 'alert') {
+      soundAsset = 'sounds/alarm.mp3'; // الصوت الافتراضي للتنبيهات الأخرى
+    }
+
+    await _audioPlayer.play(AssetSource(soundAsset));
     
     await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, 
       const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
@@ -168,7 +181,6 @@ class _AdminPageState extends State<AdminPage> {
         title: Text(type == 'alert' ? "🚨 تحذير" : "ℹ️ إشعار"),
         content: Text(msg),
         actions: [
-          // تم التأكد أن الإحداثيات هنا هي القادمة من جهاز السيارة عبر Firebase
           if (d['lat'] != null && d['lat'].toString().isNotEmpty) 
             ElevatedButton(
               onPressed: () => launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${d['lat']},${d['lng']}")), 
@@ -400,7 +412,6 @@ class _AdminPageState extends State<AdminPage> {
     ],
   );
 
-  // تم تعديل دالة الأزرار لترسل أمراً فقط ولا تنفذ أي كود محلي (GPS/Battery) على هاتف الأدمن
   Widget _actionBtn(int id, String l, IconData i, Color c, bool isDark) => Card(
     elevation: 2,
     child: InkWell(
