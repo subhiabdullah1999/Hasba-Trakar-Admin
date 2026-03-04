@@ -1,3 +1,4 @@
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:hasba_trakar_admin/ui/dashboard_page.dart';
@@ -60,6 +61,9 @@ class _AdminPageState extends State<AdminPage> {
     _carID = prefs.getString('car_id');
     
     if (_carID != null) {
+      // --- إضافة: الاشتراك في Topic الخاص بالسيارة لاستقبال إشعارات FCM في الخلفية ---
+      await FirebaseMessaging.instance.subscribeToTopic(_carID!);
+      
       _listenToStatus();
       _loadNotificationsFromDisk();
       
@@ -109,10 +113,34 @@ class _AdminPageState extends State<AdminPage> {
     }
   }
 
-  void _setupNotifs() async {
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    await _notif.initialize(const InitializationSettings(android: androidInit));
-  }
+ void _setupNotifs() async {
+  // تهيئة الإشعارات المحلية
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  await _notif.initialize(const InitializationSettings(android: androidInit));
+
+  // --- استقبال FCM والتطبيق مفتوح (Foreground) ---
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    if (message.notification != null) {
+      Map<String, dynamic> data = {
+        'id': message.data['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        'type': message.data['type'] ?? 'alert',
+        'message': message.notification!.body ?? '',
+        'lat': message.data['lat'] ?? '',
+        'lng': message.data['lng'] ?? '',
+      };
+      _handleResponse(data);
+    }
+  });
+
+  // --- معالجة الضغط على الإشعار والتطبيق في الخلفية ---
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
+      notifications: _allNotifications,
+      onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
+      onClearAll: () { setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); }); },
+    )));
+  });
+}
 
   void _listenToStatus() {
     _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
@@ -132,14 +160,16 @@ class _AdminPageState extends State<AdminPage> {
     });
   }
 
-  // --- دالة معدلة لاختيار الصوت بناءً على النص القادم من Firebase ---
   void _handleResponse(Map d) async {
     String type = d['type'] ?? '';
     String msg = d['message'] ?? '';
     
+    // منع تكرار نفس الرسالة إذا كانت مسجلة بالفعل
+    if (_allNotifications.isNotEmpty && _allNotifications.first['id'] == d['id']?.toString()) return;
+
     setState(() {
       _allNotifications.insert(0, {
-        'id': d['id']?.toString() ?? "", 
+        'id': d['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(), 
         'type': type,
         'message': msg,
         'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
@@ -154,22 +184,38 @@ class _AdminPageState extends State<AdminPage> {
 
     await _audioPlayer.stop();
 
-    // اختيار الصوت الذكي الجديد
-    String soundAsset = 'sounds/notification.mp3'; // افتراضي
+    // نظام اختيار الصوت الذكي بناءً على الكلمات المفتاحية
+    String soundAsset = 'sounds/notification.mp3'; 
     if (msg.contains("سرقة") || msg.contains("اهتزاز") || msg.contains("محاولة اختراق")) {
-      soundAsset = 'sounds/سرقة.mp3';
+      soundAsset = 'sounds/b.mp3';
     } else if (msg.contains("سرعة") || msg.contains("تجاوز")) {
-      soundAsset = 'sounds/تجاوز سرعة.mp3';
+      soundAsset = 'sounds/a.mp3';
     } else if (msg.contains("نطاق") || msg.contains("المنطقة الآمنة") || msg.contains("تحركت")) {
-      soundAsset = 'sounds/نطاق الحماية.mp3';
+      soundAsset = 'sounds/c.mp3';
     } else if (type == 'alert') {
-      soundAsset = 'sounds/alarm.mp3'; // الصوت الافتراضي للتنبيهات الأخرى
+      soundAsset = 'sounds/alarm.mp3'; 
     }
 
-    await _audioPlayer.play(AssetSource(soundAsset));
+    try {
+      await _audioPlayer.play(AssetSource(soundAsset));
+    } catch (e) {
+      debugPrint("Audio Play Error: $e");
+    }
     
-    await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, 
-      const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
+    await _notif.show(
+      DateTime.now().millisecond, 
+      type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", 
+      msg, 
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'high_importance_channel', 
+          'إشعارات هصبة الهامة', 
+          importance: Importance.max, 
+          priority: Priority.high,
+          playSound: true,
+        )
+      )
+    );
     
     if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
   }
@@ -178,13 +224,15 @@ class _AdminPageState extends State<AdminPage> {
     _isDialogShowing = true;
     showDialog(context: context, barrierDismissible: false, builder: (c) {
       return AlertDialog(
-        title: Text(type == 'alert' ? "🚨 تحذير" : "ℹ️ إشعار"),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(type == 'alert' ? "🚨 تحذير أمني" : "ℹ️ إشعار جديد"),
         content: Text(msg),
         actions: [
           if (d['lat'] != null && d['lat'].toString().isNotEmpty) 
-            ElevatedButton(
+            ElevatedButton.icon(
+              icon: const Icon(Icons.location_on),
               onPressed: () => launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${d['lat']},${d['lng']}")), 
-              child: const Text("فتح موقع السيارة")
+              label: const Text("موقع السيارة")
             ),
           TextButton(onPressed: () { _isDialogShowing = false; Navigator.pop(c); }, child: const Text("موافق")),
         ],
@@ -211,14 +259,17 @@ class _AdminPageState extends State<AdminPage> {
       ),
       body: _carID == null 
           ? const Center(child: CircularProgressIndicator()) 
-          : SingleChildScrollView(
-              child: Column(
-                children: [
-                  _statusWidget(isDark),
-                  _sensitivityLevelsWidget(isDark), 
-                  _numbersWidget(isDark),
-                  _actionsWidget(isDark), 
-                ],
+          : RefreshIndicator(
+              onRefresh: () async => _loadSavedNumbers(),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    _statusWidget(isDark),
+                    _sensitivityLevelsWidget(isDark), 
+                    _numbersWidget(isDark),
+                    _actionsWidget(isDark), 
+                  ],
+                ),
               ),
             ),
     );
@@ -243,17 +294,12 @@ class _AdminPageState extends State<AdminPage> {
       ),
       if (_unreadCount > 0)
         Positioned(
-          right: 8, 
-          top: 8, 
+          right: 8, top: 8, 
           child: Container(
             padding: const EdgeInsets.all(2), 
             decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)), 
             constraints: const BoxConstraints(minWidth: 16, minHeight: 16), 
-            child: Text(
-              '$_unreadCount', 
-              style: const TextStyle(color: Colors.white, fontSize: 10), 
-              textAlign: TextAlign.center
-            )
+            child: Text('$_unreadCount', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center)
           )
         ),
     ],
@@ -261,10 +307,7 @@ class _AdminPageState extends State<AdminPage> {
 
   Widget _statusWidget(bool isDark) => InkWell(
     onTap: () {
-      setState(() {
-        _unreadCount = 0;
-        _saveUnreadCount();
-      });
+      setState(() { _unreadCount = 0; _saveUnreadCount(); });
       Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(notifications: _allNotifications, onDelete: (i){}, onClearAll: (){})));
     },
     child: Container(
@@ -395,16 +438,14 @@ class _AdminPageState extends State<AdminPage> {
           _customActionBtn("نطاق الأمان", Icons.track_changes, Colors.purple, isDark, () {
             Navigator.push(context, MaterialPageRoute(builder: (context) => GeofencePage(carID: _carID!)));
           }),
-          
           _actionBtn(5, "اتصال بالسيارة", Icons.phone_forwarded, Colors.teal, isDark),
-         
           _customActionBtn("مراقبة الرحلة", Icons.speed, Colors.orange, isDark, () {
             Navigator.push(context, MaterialPageRoute(builder: (context) => DashboardPage(carID: _carID!)));
           }),
           _customActionBtn("سجل الرحلات", Icons.history_edu, Colors.brown, isDark, () {
-  Navigator.push(context, MaterialPageRoute(builder: (context) => const TripsHistoryPage()));
-}),
- _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent, isDark),
+             Navigator.push(context, MaterialPageRoute(builder: (context) => const TripsHistoryPage()));
+          }),
+          _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent, isDark),
           _actionBtn(9, "نقطة الاتصال", Icons.wifi_tethering, Colors.indigo, isDark),
           _actionBtn(10, "إغلاق الاتصال", Icons.portable_wifi_off, Colors.grey, isDark),
         ],

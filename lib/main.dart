@@ -4,8 +4,16 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart'; 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'; 
-import 'package:local_auth/local_auth.dart'; // مكتبة البصمة
+import 'package:local_auth/local_auth.dart'; 
+import 'package:firebase_messaging/firebase_messaging.dart'; // إضافة FCM
 import 'ui/splash_page.dart';
+
+// --- ميزة الاستقبال في الخلفية العميقة (FCM Background Handler) ---
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  print("📩 إشعار مستلم في الخلفية: ${message.notification?.title}");
+}
 
 // تعريف الـ Notifier بشكل عالمي (لتبديل الثيم)
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
@@ -19,10 +27,31 @@ void main() async {
   
   FirebaseDatabase.instance.databaseURL = "https://car-location-67e15-default-rtdb.firebaseio.com/";
 
-  // إعداد قنوات الإشعارات للأندرويد
+  // 1. إعداد استقبال FCM في الخلفية
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // 2. إعداد قنوات الإشعارات للأندرويد (دعم الصوت المخصص والخلفية)
   const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
   const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+  
+  // تعريف القناة عالية الأهمية مع ربط ملف الصوت
+  // ملاحظة: تأكد من وضع ملف alarm.mp3 في android/app/src/main/res/raw/
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'high_importance_channel', 
+    'إشعارات هصبة الهامة',
+    description: 'تستخدم لتنبيهات السرعة والاهتزاز الفورية',
+    importance: Importance.max,
+    playSound: true,
+    sound: RawResourceAndroidNotificationSound('a'), // اسم ملف الصوت في مجلد raw
+    enableVibration: true,
+  );
+
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+  
+  // إنشاء القناة في النظام برمجياً
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
 
   SharedPreferences prefs = await SharedPreferences.getInstance();
   String? carID = prefs.getString('car_id');
@@ -33,15 +62,17 @@ void main() async {
   // استدعاء السماحيات بشكل آمن وشامل عند التشغيل
   await requestPermissions();
 
-  // إذا كان هناك معرف سيارة، نبدأ مراقبة الرادار فوراً لاستقبال الإشعارات (حتى والتطبيق مغلق)
-  if (carID != null) {
+  // 3. الاشتراك في Topic السيارة لضمان وصول الإشعارات من جوجل
+  if (carID != null && carID.isNotEmpty) {
+    await FirebaseMessaging.instance.subscribeToTopic(carID);
+    print("✅ تم الاشتراك في رادار جوجل للسيارة: $carID");
     startForegroundMonitoring(carID);
   }
 
   runApp(AdminApp(savedID: carID));
 }
 
-// دالة الرادار الدائم لاستقبال التنبيهات من السيارة
+// دالة الرادار الدائم لاستقبال التنبيهات من قاعدة البيانات مباشرة (ميزتك الأصلية)
 void startForegroundMonitoring(String carID) {
   DatabaseReference ref = FirebaseDatabase.instance.ref('devices/$carID/responses');
   
@@ -63,24 +94,25 @@ void startForegroundMonitoring(String carID) {
   });
 }
 
-// دالة إظهار الإشعار على الشاشة
+// دالة إظهار الإشعار على الشاشة (محدثة لتعمل مع ملف الصوت المخصص)
 Future<void> _triggerUrgentNotification(String type, String msg) async {
   AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
-    'car_radar_channel', 
-    'رادار الحماية',
+    'high_importance_channel', // استخدام القناة الموحدة
+    'إشعارات هصبة الهامة',
     importance: Importance.max,
     priority: Priority.high,
     fullScreenIntent: true, 
     ongoing: type == 'alert', 
     styleInformation: BigTextStyleInformation(msg),
     playSound: true,
+    sound: const RawResourceAndroidNotificationSound('a'), // تكرار اسم ملف الصوت هنا
     enableVibration: true,
   );
 
   NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
   
   await flutterLocalNotificationsPlugin.show(
-    0, 
+    DateTime.now().millisecond, 
     type == 'alert' ? "🚨 تنبيه أمني خطير!" : "ℹ️ تحديث من السيارة",
     msg, 
     platformChannelSpecifics
@@ -89,7 +121,16 @@ Future<void> _triggerUrgentNotification(String type, String msg) async {
 
 // دالة طلب الصلاحيات الشاملة
 Future<void> requestPermissions() async {
-  await Permission.notification.request();
+  FirebaseMessaging messaging = FirebaseMessaging.instance;
+  await messaging.requestPermission(
+    alert: true,
+    announcement: false,
+    badge: true,
+    carPlay: false,
+    criticalAlert: true,
+    provisional: false,
+    sound: true,
+  );
 
   if (!await Permission.ignoreBatteryOptimizations.isGranted) {
     await Permission.ignoreBatteryOptimizations.request();
@@ -100,14 +141,36 @@ Future<void> requestPermissions() async {
     Permission.phone,
     Permission.sensors,
     Permission.systemAlertWindow, 
+    Permission.notification,
   ].request();
   
   print("Permissions status: $statuses");
 }
 
-class AdminApp extends StatelessWidget {
+class AdminApp extends StatefulWidget {
   final String? savedID;
   const AdminApp({super.key, this.savedID});
+
+  @override
+  State<AdminApp> createState() => _AdminAppState();
+}
+
+class _AdminAppState extends State<AdminApp> {
+  
+  @override
+  void initState() {
+    super.initState();
+    
+    // إعداد الاستماع للإشعارات والتطبيق مفتوح (Foreground)
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      if (message.notification != null) {
+        _triggerUrgentNotification(
+          "info", 
+          "${message.notification!.title}: ${message.notification!.body}"
+        );
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -128,15 +191,13 @@ class AdminApp extends StatelessWidget {
             primarySwatch: Colors.blue,
             useMaterial3: true,
           ),
-          // تم تغليف البداية بـ AuthWrapper لفحص البصمة قبل الـ Splash
-          home: AuthWrapper(child: SplashScreen(savedID: savedID)),
+          home: AuthWrapper(child: SplashScreen(savedID: widget.savedID)),
         );
       },
     );
   }
 }
 
-// --- ويدجت حارس الأمان (البصمة) المحدث لمراقبة العودة للتطبيق ---
 class AuthWrapper extends StatefulWidget {
   final Widget child;
   const AuthWrapper({super.key, required this.child});
@@ -145,7 +206,6 @@ class AuthWrapper extends StatefulWidget {
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-// إضافة WidgetsBindingObserver لمراقبة حالة التطبيق عند الخروج والعودة
 class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   bool _isAuthenticated = false;
   bool _checkingAuth = true;
@@ -153,21 +213,18 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    // إضافة المراقب لدورة حياة التطبيق
     WidgetsBinding.instance.addObserver(this);
     _checkBiometricSetting();
   }
 
   @override
   void dispose() {
-    // إزالة المراقب عند إغلاق الويدجت
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // إذا عاد المستخدم للتطبيق من الخلفية
     if (state == AppLifecycleState.resumed) {
       _checkBiometricSetting();
     }
@@ -178,7 +235,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
     bool isEnabled = prefs.getBool('biometric_enabled') ?? false;
 
     if (isEnabled) {
-      // إذا كانت مفعلة، نجعل الحالة "غير موثق" ونطلب البصمة
       setState(() {
         _isAuthenticated = false;
         _checkingAuth = true;
@@ -209,7 +265,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
         });
       }
     } catch (e) {
-      // في حال حدوث خطأ أو عدم وجود بصمة في الجهاز، نسمح بالدخول لعدم قفل التطبيق نهائياً
       setState(() {
         _isAuthenticated = true;
         _checkingAuth = false;
