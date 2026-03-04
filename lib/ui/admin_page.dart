@@ -33,12 +33,13 @@ class _AdminPageState extends State<AdminPage> {
   String _lastStatus = "انتظار التحديثات...";
   String? _carID;
   bool _isDialogShowing = false;
-  bool _isExpanded = true; 
+  
+  // تعديل: القيمة الافتراضية false وسنتحكم بها برمجياً عند التحميل
+  bool _isExpanded = false; 
 
   List<Map<String, String>> _allNotifications = [];
   String? _lastMessageId; 
   
-  // عداد الإشعارات غير المقروءة
   int _unreadCount = 0; 
 
   final List<int> _sensitivityLevels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
@@ -50,7 +51,6 @@ class _AdminPageState extends State<AdminPage> {
     _loadSavedNumbers();
   }
 
-  // دالة لحفظ العداد في الذاكرة
   void _saveUnreadCount() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setInt('unread_count_$_carID', _unreadCount);
@@ -61,18 +61,26 @@ class _AdminPageState extends State<AdminPage> {
     _carID = prefs.getString('car_id');
     
     if (_carID != null) {
-      // --- إضافة: الاشتراك في Topic الخاص بالسيارة لاستقبال إشعارات FCM في الخلفية ---
       await FirebaseMessaging.instance.subscribeToTopic(_carID!);
-      
       _listenToStatus();
       _loadNotificationsFromDisk();
       
+      String localN1 = prefs.getString('num1_$_carID') ?? "";
+      String localN2 = prefs.getString('num2_$_carID') ?? "";
+      String localN3 = prefs.getString('num3_$_carID') ?? "";
+
       setState(() {
         _unreadCount = prefs.getInt('unread_count_$_carID') ?? 0;
-        _n1.text = prefs.getString('num1_$_carID') ?? "";
-        _n2.text = prefs.getString('num2_$_carID') ?? "";
-        _n3.text = prefs.getString('num3_$_carID') ?? "";
-        if (_n1.text.isNotEmpty) _isExpanded = false;
+        _n1.text = localN1;
+        _n2.text = localN2;
+        _n3.text = localN3;
+
+        // التعديل: إذا كانت الأرقام فارغة عند الفتح، نجعل الحقل يتوسع تلقائياً
+        if (localN1.isEmpty && localN2.isEmpty && localN3.isEmpty) {
+          _isExpanded = true;
+        } else {
+          _isExpanded = false;
+        }
       });
 
       _dbRef.child('devices/$_carID/numbers').get().then((snapshot) {
@@ -80,13 +88,14 @@ class _AdminPageState extends State<AdminPage> {
           var data = snapshot.value;
           setState(() {
             if (data is Map) {
-              _n1.text = data['1']?.toString() ?? _n1.text;
-              _n2.text = data['2']?.toString() ?? _n2.text;
-              _n3.text = data['3']?.toString() ?? _n3.text;
-            } else if (data is List) {
-              if (data.isNotEmpty) _n1.text = data[0]?.toString() ?? _n1.text;
-              if (data.length > 1) _n2.text = data[1]?.toString() ?? _n2.text;
-              if (data.length > 2) _n3.text = data[2]?.toString() ?? _n3.text;
+              _n1.text = data['num1']?.toString() ?? _n1.text;
+              _n2.text = data['num2']?.toString() ?? _n2.text;
+              _n3.text = data['num3']?.toString() ?? _n3.text;
+
+              // إعادة فحص الحالة بعد الجلب من Firebase لضمان الدقة
+              if (_n1.text.isEmpty && _n2.text.isEmpty && _n3.text.isEmpty) {
+                _isExpanded = true;
+              }
             }
           });
         }
@@ -113,34 +122,31 @@ class _AdminPageState extends State<AdminPage> {
     }
   }
 
- void _setupNotifs() async {
-  // تهيئة الإشعارات المحلية
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  await _notif.initialize(const InitializationSettings(android: androidInit));
+  void _setupNotifs() async {
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    await _notif.initialize(const InitializationSettings(android: androidInit));
 
-  // --- استقبال FCM والتطبيق مفتوح (Foreground) ---
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    if (message.notification != null) {
-      Map<String, dynamic> data = {
-        'id': message.data['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
-        'type': message.data['type'] ?? 'alert',
-        'message': message.notification!.body ?? '',
-        'lat': message.data['lat'] ?? '',
-        'lng': message.data['lng'] ?? '',
-      };
-      _handleResponse(data);
-    }
-  });
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      if (message.notification != null) {
+        Map<String, dynamic> data = {
+          'id': message.data['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          'type': message.data['type'] ?? 'alert',
+          'message': message.notification!.body ?? '',
+          'lat': message.data['lat'] ?? '',
+          'lng': message.data['lng'] ?? '',
+        };
+        _handleResponse(data);
+      }
+    });
 
-  // --- معالجة الضغط على الإشعار والتطبيق في الخلفية ---
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
-      notifications: _allNotifications,
-      onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
-      onClearAll: () { setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); }); },
-    )));
-  });
-}
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
+        notifications: _allNotifications,
+        onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
+        onClearAll: () { setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); }); },
+      )));
+    });
+  }
 
   void _listenToStatus() {
     _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
@@ -164,7 +170,6 @@ class _AdminPageState extends State<AdminPage> {
     String type = d['type'] ?? '';
     String msg = d['message'] ?? '';
     
-    // منع تكرار نفس الرسالة إذا كانت مسجلة بالفعل
     if (_allNotifications.isNotEmpty && _allNotifications.first['id'] == d['id']?.toString()) return;
 
     setState(() {
@@ -184,7 +189,6 @@ class _AdminPageState extends State<AdminPage> {
 
     await _audioPlayer.stop();
 
-    // نظام اختيار الصوت الذكي بناءً على الكلمات المفتاحية
     String soundAsset = 'sounds/notification.mp3'; 
     if (msg.contains("سرقة") || msg.contains("اهتزاز") || msg.contains("محاولة اختراق")) {
       soundAsset = 'sounds/b.mp3';
@@ -213,9 +217,9 @@ class _AdminPageState extends State<AdminPage> {
           importance: Importance.max, 
           priority: Priority.high,
           playSound: true,
+          )
         )
-      )
-    );
+      );
     
     if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
   }
@@ -372,7 +376,8 @@ class _AdminPageState extends State<AdminPage> {
   Widget _numbersWidget(bool isDark) => Card(
     margin: const EdgeInsets.symmetric(horizontal: 15),
     child: ExpansionTile(
-      key: GlobalKey(),
+      // استخدام UniqueKey يجبر الـ Widget على التحديث عند تغيير _isExpanded برمجياً
+      key: UniqueKey(),
       initiallyExpanded: _isExpanded,
       onExpansionChanged: (val) => setState(() => _isExpanded = val),
       title: Text("📞 أرقام الطوارئ المحفوظة", style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
@@ -386,13 +391,22 @@ class _AdminPageState extends State<AdminPage> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade800, minimumSize: const Size(double.infinity, 50)),
             icon: const Icon(Icons.save, color: Colors.white),
             onPressed: () async {
-              await _dbRef.child('devices/$_carID/numbers').set({'1': _n1.text, '2': _n2.text, '3': _n3.text});
+              if (_carID == null) return;
+              await _dbRef.child('devices/$_carID/numbers').set({
+                'num1': _n1.text.trim(),
+                'num2': _n2.text.trim(),
+                'num3': _n3.text.trim(),
+              });
               SharedPreferences prefs = await SharedPreferences.getInstance();
-              await prefs.setString('num1_$_carID', _n1.text);
-              await prefs.setString('num2_$_carID', _n2.text);
-              await prefs.setString('num3_$_carID', _n3.text);
+              await prefs.setString('num1_$_carID', _n1.text.trim());
+              await prefs.setString('num2_$_carID', _n2.text.trim());
+              await prefs.setString('num3_$_carID', _n3.text.trim());
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("✅ تم حفظ الأرقام بنجاح"))
+              );
               setState(() { _isExpanded = false; });
-            }, 
+            },
             label: const Text("حفظ وتعديل الأرقام", style: TextStyle(color: Colors.white)),
           ),
         ])),
@@ -443,7 +457,7 @@ class _AdminPageState extends State<AdminPage> {
             Navigator.push(context, MaterialPageRoute(builder: (context) => DashboardPage(carID: _carID!)));
           }),
           _customActionBtn("سجل الرحلات", Icons.history_edu, Colors.brown, isDark, () {
-             Navigator.push(context, MaterialPageRoute(builder: (context) => const TripsHistoryPage()));
+               Navigator.push(context, MaterialPageRoute(builder: (context) => const TripsHistoryPage()));
           }),
           _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent, isDark),
           _actionBtn(9, "نقطة الاتصال", Icons.wifi_tethering, Colors.indigo, isDark),
