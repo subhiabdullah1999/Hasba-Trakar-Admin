@@ -22,14 +22,21 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   void _startApp() async {
-    // 1. طلب الصلاحيات الشاملة (الحفاظ على الميزة دون حذف أي سطر)
+    // 1. طلب الصلاحيات الشاملة (المعدلة تقنياً لمنع الانهيار مع الحفاظ على كل الصلاحيات المطلوبة)
+    // قمنا بفصل طلب systemAlertWindow لضمان استقرار التشغيل على أجهزة Redmi
+    
+    // طلب الصلاحيات الأساسية أولاً
     await [
       Permission.location, 
       Permission.notification,
       Permission.phone,
       Permission.sensors,
-      Permission.systemAlertWindow
     ].request();
+
+    // طلب صلاحية "الظهور فوق التطبيقات" بشكل منفصل (الميزة التي تسبب الانهيار إذا طلبت مع المجموعة)
+    if (await Permission.systemAlertWindow.isDenied) {
+      await Permission.systemAlertWindow.request();
+    }
 
     // 2. قراءة نوع المستخدم المحفوظ للتأكد من الوجهة الصحيحة
     SharedPreferences prefs = await SharedPreferences.getInstance();
