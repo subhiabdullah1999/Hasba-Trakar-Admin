@@ -20,9 +20,16 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // استخراج البيانات بشكل آمن لضمان عدم حدوث null
   String type = message.data['type'] ?? 'alert';
   String body = message.notification?.body ?? message.data['message'] ?? 'تنبيه أمني جديد من السيارة';
-  
-  // إظهار إشعار محلي عند استلام FCM والتطبيق مغلق تماماً لضمان الصوت وإيقاظ الشاشة
-  await _triggerUrgentNotification(type, body);
+  String currentId = message.data['id']?.toString() ?? "";
+
+  // [تعديل منع التكرار في الخلفية]
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  String? lastId = prefs.getString('last_handled_id');
+
+  if (currentId != lastId || currentId.isEmpty) {
+    if (currentId.isNotEmpty) await prefs.setString('last_handled_id', currentId);
+    await _triggerUrgentNotification(type, body);
+  }
   
   print("📩 إشعار مستلم في الخلفية العميقة: ${message.notification?.title}");
 }
@@ -129,6 +136,7 @@ void startForegroundMonitoring(String carID) {
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String? lastId = prefs.getString('last_handled_id');
 
+      // [التعديل الجوهري لمنع التكرار]
       if (currentId != lastId && currentId.isNotEmpty) {
         await prefs.setString('last_handled_id', currentId);
         _triggerUrgentNotification(type, msg);
@@ -145,7 +153,7 @@ Future<void> _triggerUrgentNotification(String type, String msg) async {
   String channelId = 'channel_alarm';
   String soundName = 'alarm';
 
-  // تحديد القناة والصوت بناءً على نوع التنبيه
+  // [ميزة الأصوات المخصصة]: يتم اختيار الصوت بناءً على الكلمات المفتاحية
   if (msg.contains("سرقة") || msg.contains("اهتزاز") || msg.contains("محاولة اختراق")) {
     channelId = 'channel_b';
     soundName = 'b';
@@ -168,7 +176,7 @@ Future<void> _triggerUrgentNotification(String type, String msg) async {
     ongoing: type == 'alert', 
     styleInformation: BigTextStyleInformation(msg),
     playSound: true,
-    sound: RawResourceAndroidNotificationSound(soundName),
+    sound: RawResourceAndroidNotificationSound(soundName), // هنا يتم تشغيل الصوت المخصص
     enableVibration: true,
     vibrationPattern: Int64List.fromList([0, 800, 400, 800]), // نمط اهتزاز أقوى
     visibility: NotificationVisibility.public, // يضمن الظهور فوق شاشة القفل
@@ -299,7 +307,7 @@ Future<void> requestPermissions() async {
   );
 
   if (await Permission.systemAlertWindow.isDenied) {
-     await Permission.systemAlertWindow.request();
+      await Permission.systemAlertWindow.request();
   }
 
   if (!await Permission.ignoreBatteryOptimizations.isGranted) {
