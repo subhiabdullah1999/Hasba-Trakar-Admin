@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:hasba_trakar_admin/main.dart';
 import 'package:hasba_trakar_admin/ui/about_app.dart';
@@ -8,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'dart:io'; // ضروري لفحص نوع النظام
+import 'package:android_intent_plus/android_intent.dart'; // ضروري لفتح الإعدادات
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -34,6 +35,24 @@ class _SettingsPageState extends State<SettingsPage> {
       _isDarkMode = prefs.getBool('dark_mode') ?? false;
       _isBiometricEnabled = prefs.getBool('biometric_enabled') ?? false;
     });
+  }
+
+  // --- [ميزة جديدة] دالة فتح إعدادات التشغيل التلقائي ---
+  Future<void> _openAutostartSettings() async {
+    if (Platform.isAndroid) {
+      final List<AndroidIntent> intents = [
+        const AndroidIntent(action: 'miui.intent.action.OP_AUTO_START', package: 'com.miui.securitycenter'),
+        const AndroidIntent(action: 'android.settings.APPLICATION_DETAILS_SETTINGS', data: 'package:com.example.hasba_trakar_admin'),
+      ];
+      for (var intent in intents) {
+        try {
+          await intent.launch();
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+    }
   }
 
   void _toggleTheme(bool value) async {
@@ -103,8 +122,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  // --- دالة الحذف النهائي المحدثة مع إيقاف النظام ---
- void _deleteCarFromDatabase() async {
+  void _deleteCarFromDatabase() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String? carID = prefs.getString('car_id');
 
@@ -129,14 +147,11 @@ class _SettingsPageState extends State<SettingsPage> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
               try {
-                // 1. إرسال أمر إيقاف فوري (Command 6)
                 await _dbRef.child('devices/$carID/commands').set({
                   'id': 6,
                   'timestamp': ServerValue.timestamp,
                 });
 
-                // 2. تصفير الحقول الحساسة أولاً لضمان عدم استرجاعها من الذاكرة المؤقتة
-                // نقوم بوضع قيم فارغة للأرقام والإعدادات
                 await _dbRef.child('devices/$carID').update({
                   'numbers': null,
                   'trip_data': null,
@@ -145,19 +160,14 @@ class _SettingsPageState extends State<SettingsPage> {
                   'vibration_enabled': false,
                 });
 
-                // انتظار بسيط لضمان تنفيذ التحديثات في السيرفر
                 await Future.delayed(const Duration(milliseconds: 800));
-
-                // 3. الحذف النهائي والجذري للعقدة بالكامل
                 await _dbRef.child('devices/$carID').remove();
                 
-                // 4. مسح كافة البيانات المحلية من هاتف الأدمن
                 await prefs.remove('car_id');
                 await prefs.remove('saved_notifs_$carID');
                 await prefs.remove('unread_count_$carID');
                 await prefs.setBool('was_system_active', false);
                 
-                // تذكير: يجب مسح أي بيانات أخرى متعلقة بالإشعارات لضمان التصفير الشامل
                 final allKeys = prefs.getKeys();
                 for (String key in allKeys) {
                   if (key.contains(carID)) {
@@ -251,6 +261,15 @@ class _SettingsPageState extends State<SettingsPage> {
 
             const Divider(height: 30, indent: 20, endIndent: 20),
 
+            // --- [الميزة الجديدة مدمجة هنا] ---
+            _buildOption(
+              Icons.bolt_outlined, 
+              "تحسين استقبال التنبيهات", 
+              "تفعيل Autostart لضمان عمل الحماية بالخلفية", 
+              Colors.orange, 
+              _openAutostartSettings
+            ),
+
             // إدارة البيانات
             _buildOption(
               Icons.delete_sweep_outlined, 
@@ -269,7 +288,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _resetCarID
             ),
 
-            // حذف السيارة نهائياً (الميزة الجديدة)
+            // حذف السيارة نهائياً
             _buildOption(
               Icons.no_crash_outlined, 
               "حذف السيارة نهائياً", 
