@@ -16,7 +16,7 @@ import 'ui/splash_page.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  
+  FirebaseDatabase.instance.setPersistenceEnabled(true);
   // استخراج البيانات بشكل آمن لضمان عدم حدوث null
   String type = message.data['type'] ?? 'alert';
   String body = message.notification?.body ?? message.data['message'] ?? 'تنبيه أمني جديد من السيارة';
@@ -44,8 +44,6 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   
-  // --- [تعديل] تفعيل المزامنة المستمرة لضمان الاستقبال والشاشة مغلقة ---
-  FirebaseDatabase.instance.setPersistenceEnabled(true);
   FirebaseDatabase.instance.databaseURL = "https://car-location-67e15-default-rtdb.firebaseio.com/";
 
   // 1. إعداد استقبال FCM في الخلفية
@@ -149,46 +147,54 @@ void startForegroundMonitoring(String carID) {
 }
 
 // دالة إظهار الإشعار (محدثة لاختيار القناة والصوت بناءً على محتوى الرسالة)
+// دالة إظهار الإشعار (معدلة لتقرأ الأصوات المخصصة من الإعدادات حتى في الخلفية)
 Future<void> _triggerUrgentNotification(String type, String msg) async {
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  
+  // تحديد القناة الافتراضية
   String channelId = 'channel_alarm';
-  String soundName = 'alarm';
+  String soundResourceName = 'alarm'; // اسم الملف في res/raw بدون امتداد
 
-  // [ميزة الأصوات المخصصة]: يتم اختيار الصوت بناءً على الكلمات المفتاحية
+  // جلب القيم المختارة وتنظيفها من المسارات والامتدادات
+  String? savedTheft = prefs.getString('sound_theft');
+  String? savedSpeed = prefs.getString('sound_speed');
+  String? savedGeo = prefs.getString('sound_geofence');
+  String? savedAlarm = prefs.getString('sound_alarm');
+
+  // وظيفة داخلية لتنظيف الاسم: تحول "sounds/a.mp3" إلى "a"
+  String cleanName(String? path, String defaultReturn) {
+    if (path == null || path.isEmpty) return defaultReturn;
+    return path.split('/').last.split('.').first;
+  }
+
   if (msg.contains("سرقة") || msg.contains("اهتزاز") || msg.contains("محاولة اختراق")) {
-    channelId = 'channel_b';
-    soundName = 'b';
+    channelId = 'channel_b_v2'; // قمنا بتغيير ID القناة لضمان تحديث الإعدادات في أندرويد
+    soundResourceName = cleanName(savedTheft, 'b');
   } else if (msg.contains("سرعة") || msg.contains("تجاوز")) {
-    channelId = 'channel_a';
-    soundName = 'a';
+    channelId = 'channel_a_v2';
+    soundResourceName = cleanName(savedSpeed, 'a');
   } else if (msg.contains("نطاق") || msg.contains("المنطقة الآمنة") || msg.contains("تحركت")) {
-    channelId = 'channel_c';
-    soundName = 'c';
+    channelId = 'channel_c_v2';
+    soundResourceName = cleanName(savedGeo, 'c');
+  } else {
+    soundResourceName = cleanName(savedAlarm, 'alarm');
   }
 
   AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
     channelId, 
-    'إشعارات هصبة الهامة',
-    channelDescription: 'تنبيهات الحماية الفورية',
+    'تنبيهات هصبة المخصصة',
     importance: Importance.max,
-    priority: Priority.max, // رفع الأولوية للقصوى لضمان الإيقاظ
-    fullScreenIntent: true, // ضروري جداً لإيقاظ الشاشة وفتح واجهة تنبيه
-    category: AndroidNotificationCategory.alarm,
-    ongoing: type == 'alert', 
-    styleInformation: BigTextStyleInformation(msg),
+    priority: Priority.max,
     playSound: true,
-    sound: RawResourceAndroidNotificationSound(soundName), // هنا يتم تشغيل الصوت المخصص
+    sound: RawResourceAndroidNotificationSound(soundResourceName), // يعمل فقط إذا كان الملف في res/raw
     enableVibration: true,
-    vibrationPattern: Int64List.fromList([0, 800, 400, 800]), // نمط اهتزاز أقوى
-    visibility: NotificationVisibility.public, // يضمن الظهور فوق شاشة القفل
   );
 
-  NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
-  
   await flutterLocalNotificationsPlugin.show(
     DateTime.now().millisecond, 
-    type == 'alert' ? "🚨 تنبيه أمني خطير!" : "ℹ️ تحديث من السيارة",
+    "تنبيه من السيارة",
     msg, 
-    platformChannelSpecifics
+    NotificationDetails(android: androidPlatformChannelSpecifics)
   );
 }
 
@@ -384,7 +390,7 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _checkBiometricSetting();
 
-    Future.delayed(const Duration(seconds: 4), () async {
+    Future.delayed(const Duration(seconds: 6), () async {
       if (mounted) {
         // فحص صلاحيات الصوت
         _checkAndShowPermissionDialog();

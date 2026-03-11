@@ -56,7 +56,10 @@ class _AppTypeSelectorState extends State<AppTypeSelector> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.admin_panel_settings, size: 100, color: Colors.blue.shade900),
+             CircleAvatar(
+              radius: 60,
+              backgroundImage: AssetImage("assets/images/logohasba.png"),
+            ),
               const SizedBox(height: 20),
               const Text(
                 "تسجيل دخول الأدمن",

@@ -80,7 +80,10 @@ class _SplashScreenState extends State<SplashScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             // أيقونة الحماية (ميزة مرئية)
-            Icon(Icons.admin_panel_settings, size: 100, color: Colors.blue.shade900),
+            CircleAvatar(
+              radius: 60,
+              backgroundImage: AssetImage("assets/images/logohasba.png"),
+            ),
             const SizedBox(height: 20),
             const Text(
               "HASBA ADMIN", 

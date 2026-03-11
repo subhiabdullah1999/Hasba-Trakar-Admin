@@ -166,7 +166,7 @@ class _AdminPageState extends State<AdminPage> {
     });
   }
 
-  void _handleResponse(Map d) async {
+ void _handleResponse(Map d) async {
     String type = d['type'] ?? '';
     String msg = d['message'] ?? '';
     
@@ -189,19 +189,27 @@ class _AdminPageState extends State<AdminPage> {
 
     await _audioPlayer.stop();
 
+    // --- التعديل الأخير: جلب الإعدادات المخصصة للنغمات ---
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    
     String soundAsset = 'sounds/notification.mp3'; 
     if (msg.contains("سرقة") || msg.contains("اهتزاز") || msg.contains("محاولة اختراق")) {
-      soundAsset = 'sounds/b.mp3';
+      // يحاول جلب النغمة المخصصة للسرقة، وإذا لم توجد يستخدم sounds/b.mp3 كافتراضي
+      soundAsset = prefs.getString('sound_theft') ?? 'sounds/b.mp3';
     } else if (msg.contains("سرعة") || msg.contains("تجاوز")) {
-      soundAsset = 'sounds/a.mp3';
+      // يحاول جلب النغمة المخصصة للسرعة، وإذا لم توجد يستخدم sounds/a.mp3 كافتراضي
+      soundAsset = prefs.getString('sound_speed') ?? 'sounds/a.mp3';
     } else if (msg.contains("نطاق") || msg.contains("المنطقة الآمنة") || msg.contains("تحركت")) {
-      soundAsset = 'sounds/c.mp3';
+      // يحاول جلب النغمة المخصصة للسياج الجغرافي، وإذا لم توجد يستخدم sounds/c.mp3 كافتراضي
+      soundAsset = prefs.getString('sound_geofence') ?? 'sounds/c.mp3';
     } else if (type == 'alert') {
-      soundAsset = 'sounds/alarm.mp3'; 
+      // يحاول جلب النغمة المخصصة للتنبيهات العامة، وإذا لم توجد يستخدم sounds/alarm.mp3 كافتراضي
+      soundAsset = prefs.getString('sound_alarm') ?? 'sounds/alarm.mp3';
     }
 
     try {
-      await _audioPlayer.play(AssetSource(soundAsset));
+      // نستخدم replaceFirst لإزالة 'sounds/' لأن AssetSource تبدأ من مجلد assets/ تلقائياً
+      await _audioPlayer.play(AssetSource(soundAsset.replaceFirst('sounds/', '')));
     } catch (e) {
       debugPrint("Audio Play Error: $e");
     }
